@@ -1,178 +1,132 @@
 """
-模型相关代码 - StockTransformer 及其子模块
-基于 THU-BDC2026 基线模型架构：
-  - PositionalEncoding: 正弦位置编码
-  - CrossStockAttention: 股票间交互注意力
-  - FeatureAttention: 时序特征注意力聚合
-  - StockTransformer: 主模型（时序编码 + 股票间交互 + 排序头）
+CausalGRUStockScorer — 单向 GRU + 三路池化的轻量时序排序模型
+
+设计原则:
+  1. 单向 GRU (causal): 隐藏状态 h_t 只依赖 x_1...x_t，模拟实时预测
+  2. 三路池化: last_hidden + max_pool(GRU_out) + mean_pool(GRU_out)
+     全部基于 GRU 输出（已融合时序上下文），不做原始特征的池化
+  3. 支持 pack_padded_sequence 处理变长序列（推理时停牌/新股场景）
+  4. 参数量 ~200-300K，适合 10 万级 per-stock 样本
 """
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
 
 
-class PositionalEncoding(nn.Module):
-    """正弦位置编码模块"""
-    def __init__(self, d_model, dropout=0.1, max_len=5000):
-        super(PositionalEncoding, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
+class CausalGRUStockScorer(nn.Module):
+    """
+    单向 GRU 股票评分模型
 
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0)
-        self.register_buffer('pe', pe)
+    Input:  [B, L, F]  (batch, 序列长度=60, 特征数)
+    Output: [B]         标量排序分数
 
-    def forward(self, x):
-        x = x + self.pe[:, :x.size(1)]
-        return self.dropout(x)
+    Pipeline:
+      Input → Linear(F→d_model) → Unidirectional GRU →
+      {last_hidden, max_pool(GRU_out), mean_pool(GRU_out)} → concat →
+      MLP → score
+    """
 
+    def __init__(self, input_dim, d_model=192, gru_hidden=128,
+                 gru_layers=2, dropout=0.15):
+        super().__init__()
 
-class CrossStockAttention(nn.Module):
-    """股票间交互注意力模块"""
-    def __init__(self, d_model, nhead, dropout=0.1):
-        super(CrossStockAttention, self).__init__()
-        self.cross_attention = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
-        self.norm = nn.LayerNorm(d_model)
-        self.dropout = nn.Dropout(dropout)
+        # 输入投影
+        self.input_proj = nn.Linear(input_dim, d_model)
 
-    def forward(self, stock_features):
-        # stock_features: [batch, num_stocks, d_model]
-        attended, _ = self.cross_attention(stock_features, stock_features, stock_features)
-        output = self.norm(stock_features + self.dropout(attended))
-        return output
+        # 单向 GRU（causal）
+        self.gru = nn.GRU(
+            input_size=d_model,
+            hidden_size=gru_hidden,
+            num_layers=gru_layers,
+            batch_first=True,
+            bidirectional=False,  # 单向，天然 causal
+            dropout=dropout if gru_layers > 1 else 0
+        )
 
+        # 三路池化拼接维度: gru_hidden * 3
+        concat_dim = gru_hidden * 3
 
-class FeatureAttention(nn.Module):
-    """特征注意力模块 - 对时序维度做加权聚合"""
-    def __init__(self, d_model, dropout=0.1):
-        super(FeatureAttention, self).__init__()
-        self.attention = nn.Sequential(
+        # 排序 MLP 头
+        self.mlp = nn.Sequential(
+            nn.Linear(concat_dim, d_model),
+            nn.ReLU(),
+            nn.Dropout(dropout),
             nn.Linear(d_model, d_model // 2),
-            nn.Tanh(),
-            nn.Linear(d_model // 2, 1),
-            nn.Softmax(dim=1)
-        )
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        # x: [batch*num_stocks, seq_len, d_model]
-        attention_weights = self.attention(x)  # [batch*num_stocks, seq_len, 1]
-        attended = torch.sum(x * attention_weights, dim=1)  # [batch*num_stocks, d_model]
-        return self.dropout(attended)
-
-
-class StockTransformer(nn.Module):
-    """
-    股票排序 Transformer 模型
-
-    流水线:
-      输入 [B, N, L, F]
-        → 投影 + 位置编码
-        → Transformer 时序编码
-        → 特征注意力聚合
-        → 股票间交互注意力
-        → 排序 MLP 头
-        → 输出 [B, N] 排序分数
-    """
-    def __init__(self, input_dim, config, num_stocks):
-        super(StockTransformer, self).__init__()
-        self.model_type = 'RankingTransformer'
-        self.config = config
-        self.num_stocks = num_stocks
-
-        # 输入投影层
-        self.input_proj = nn.Linear(input_dim, config['d_model'])
-        self.pos_encoder = PositionalEncoding(config['d_model'], config['dropout'], config['sequence_length'])
-
-        # 时序特征提取
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=config['d_model'],
-            nhead=config['nhead'],
-            dim_feedforward=config['dim_feedforward'],
-            dropout=config['dropout'],
-            batch_first=True
-        )
-        self.temporal_encoder = nn.TransformerEncoder(encoder_layer, num_layers=config['num_layers'])
-
-        # 特征注意力
-        self.feature_attention = FeatureAttention(config['d_model'], config['dropout'])
-
-        # 股票间交互注意力（可选，数据少时关闭）
-        self.use_cross_stock = config.get('use_cross_stock_attention', True)
-        if self.use_cross_stock:
-            self.cross_stock_attention = CrossStockAttention(config['d_model'], config['nhead'], config['dropout'])
-
-        # 排序特异性层
-        self.ranking_layers = nn.Sequential(
-            nn.Linear(config['d_model'], config['d_model']),
-            nn.LayerNorm(config['d_model']),
             nn.ReLU(),
-            nn.Dropout(config['dropout']),
-            nn.Linear(config['d_model'], config['d_model'] // 2),
-            nn.LayerNorm(config['d_model'] // 2),
-            nn.ReLU(),
-            nn.Dropout(config['dropout'])
+            nn.Dropout(dropout * 0.5),
+            nn.Linear(d_model // 2, 1)
         )
 
-        # 最终排序分数输出
-        self.score_head = nn.Sequential(
-            nn.Linear(config['d_model'] // 2, config['d_model'] // 4),
-            nn.ReLU(),
-            nn.Dropout(config['dropout'] * 0.5),
-            nn.Linear(config['d_model'] // 4, 1)
-        )
-
-        # 初始化权重
         self._init_weights()
 
     def _init_weights(self):
-        """Xavier 初始化权重"""
+        """Xavier 初始化"""
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 nn.init.xavier_uniform_(module.weight)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.GRU):
+                for name, param in module.named_parameters():
+                    if 'weight' in name:
+                        nn.init.xavier_uniform_(param)
+                    elif 'bias' in name:
+                        nn.init.zeros_(param)
 
-    def forward(self, src, stock_idx=None):
-        # src: [batch, num_stocks, seq_len, feature_dim]
-        batch_size, num_stocks, seq_len, feature_dim = src.size()
+    def forward(self, x, lengths=None):
+        """
+        参数:
+          x:       [B, L, F] 特征序列
+          lengths: [B] 每个样本的实际长度（可选，用于 pack_padded_sequence）
+                   如果为 None，假设所有样本长度 = L（无 padding）
+        返回:
+          scores: [B] 标量分数
+        """
+        # 输入投影
+        x = self.input_proj(x)  # [B, L, d_model]
 
-        # 重塑为 [batch*num_stocks, seq_len, feature_dim]
-        src_reshaped = src.view(batch_size * num_stocks, seq_len, feature_dim)
+        # 优化 GRU 内存布局（避免每次调用重新排列权重）
+        self.gru.flatten_parameters()
 
-        # 输入投影和位置编码
-        src_proj = self.input_proj(src_reshaped)
-        src_proj = self.pos_encoder(src_proj)
-
-        # 时序特征提取
-        temporal_features = self.temporal_encoder(src_proj)
-
-        # 特征注意力聚合
-        aggregated_features = self.feature_attention(temporal_features)
-
-        # 重塑回股票维度
-        stock_features = aggregated_features.view(batch_size, num_stocks, -1)
-
-        # 股票间交互注意力（可选）
-        if self.use_cross_stock:
-            interactive_features = self.cross_stock_attention(stock_features)
+        # GRU 编码
+        if lengths is not None:
+            # 使用 pack_padded_sequence 忽略填充位
+            lengths_cpu = lengths.cpu().to(torch.int64)
+            # enforce_sorted=False: 输入不需要按长度降序排列
+            packed = nn.utils.rnn.pack_padded_sequence(
+                x, lengths_cpu, batch_first=True, enforce_sorted=False
+            )
+            gru_out_packed, h_last = self.gru(packed)
+            gru_out, _ = nn.utils.rnn.pad_packed_sequence(
+                gru_out_packed, batch_first=True, total_length=x.size(1)
+            )
         else:
-            interactive_features = stock_features
+            gru_out, h_last = self.gru(x)  # gru_out: [B, L, H], h_last: [D*L, B, H]
 
-        # 重塑
-        interactive_features = interactive_features.view(batch_size * num_stocks, -1)
+        # 三路池化（全部基于 GRU 输出，已融合时序上下文）
+        # h_last shape: [num_layers * num_directions, B, H] = [gru_layers, B, H]
+        last_hidden = h_last[-1]           # [B, H] — 最后一层最后时间步（最新信息）
 
-        # 排序特异性变换
-        ranking_features = self.ranking_layers(interactive_features)
+        if lengths is not None:
+            # 对变长序列，max/mean 只在有效长度内计算
+            lengths = lengths.to(gru_out.device)
+            mask = torch.arange(gru_out.size(1), device=gru_out.device).unsqueeze(0) < lengths.unsqueeze(1)
+            mask = mask.unsqueeze(-1).float()  # [B, L, 1]
 
-        # 生成排序分数
-        scores = self.score_head(ranking_features)
+            # Masked max
+            masked_out = gru_out * mask + (1 - mask) * (-1e9)
+            max_pooled = masked_out.max(dim=1)[0]  # [B, H]
 
-        # 输出 [batch, num_stocks]
-        output = scores.view(batch_size, num_stocks)
-        return output
+            # Masked mean
+            sum_out = (gru_out * mask).sum(dim=1)  # [B, H]
+            mean_pooled = sum_out / lengths.unsqueeze(-1).float().clamp(min=1)  # [B, H]
+        else:
+            max_pooled = gru_out.max(dim=1)[0]   # [B, H] — 最大值（捕获强信号）
+            mean_pooled = gru_out.mean(dim=1)    # [B, H] — 均值（捕获整体趋势）
+
+        # 拼接三路池化
+        combined = torch.cat([last_hidden, max_pooled, mean_pooled], dim=-1)  # [B, H*3]
+
+        # MLP → 标量分数
+        scores = self.mlp(combined).squeeze(-1)  # [B]
+        return scores

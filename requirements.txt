@@ -1,0 +1,31 @@
+# ============================================================================
+# THU-BDC2026 项目依赖
+# Python >= 3.10, < 3.13
+# ============================================================================
+
+# --- PyTorch (CUDA 12.4) ---
+# 对于 Docker，使用 pytorch/pytorch 镜像预装版本
+# 对于本地 pip 安装，取消下面三行的注释：
+# --index-url https://download.pytorch.org/whl/cu124
+torch>=2.6.0
+torchvision>=0.21.0
+torchaudio>=2.6.0
+
+# --- 数据处理 ---
+pandas>=2.3.0
+numpy>=2.0.0
+
+# --- 机器学习 ---
+scikit-learn>=1.6.0
+
+# --- 技术指标 (需要先安装 TA-Lib C 库) ---
+# Dockerfile 中已处理，本地安装见 app/init.sh
+ta-lib>=0.6.0
+
+# --- 训练工具 ---
+tqdm>=4.67.0
+tensorboard>=2.20.0
+tensorboardX>=2.6.0
+
+# --- 模型持久化 ---
+joblib>=1.5.0

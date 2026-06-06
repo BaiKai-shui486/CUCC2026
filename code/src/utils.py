@@ -51,7 +51,7 @@ def engineer_features_39(df):
     df['sma_20'] = talib.SMA(close, timeperiod=20)
     df['ema_12'] = talib.EMA(close, timeperiod=12)
     df['ema_26'] = talib.EMA(close, timeperiod=26)
-    df['ema_60'] = talib.EMA(close, timeperiod=60)
+    # ema_60 已移除：60天窗口在短序列测试集中产生NaN
 
     # MACD
     macd_line, macd_signal_line, _ = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
@@ -79,7 +79,7 @@ def engineer_features_39(df):
     df['obv'] = talib.OBV(close, volume)
 
     # Volume-related features
-    df['volume_change'] = volume.pct_change()
+    df['volume_change'] = volume.pct_change(fill_method=None)
     df['volume_ma_5'] = talib.SMA(volume, timeperiod=5)
     df['volume_ma_20'] = talib.SMA(volume, timeperiod=20)
     df['volume_ratio'] = df['volume_ma_5'] / df['volume_ma_20']
@@ -97,9 +97,9 @@ def engineer_features_39(df):
     df['high_close_spread'] = high - close
     df['low_close_spread'] = low - close
 
-    # 处理 inf 和 NaN：前向填充保留时序信息
+    # 处理 inf 和 NaN：前向填充保留时序信息（不用bfill避免未来数据泄露）
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
-    df = df.ffill().bfill()
+    df = df.ffill()
     df.fillna(0, inplace=True)
 
     return df
@@ -170,7 +170,7 @@ def engineer_features(df):
     ])
     feature_names.extend(['OPEN0', 'HIGH0', 'LOW0', 'VWAP0'])
 
-    windows = [5, 10, 20, 30, 60]
+    windows = [5, 10, 20]  # 精简：移除30/60天窗口，避免短序列产生NaN填充
 
     # 3. Price change features (5)
     for w in windows:
@@ -193,15 +193,23 @@ def engineer_features(df):
         features.append(slope / (close + 1e-12))
         feature_names.append(f'BETA{w}')
 
-        time_period_series = pd.Series(range(w), index=close.index[:w])
-        rolling_corr = close.rolling(w).corr(time_period_series)
-        rsquare = rolling_corr ** 2
+        # RSQR: 需要至少 w 条数据才能计算
+        if len(close) >= w:
+            time_period_series = pd.Series(range(w), index=close.index[:w])
+            rolling_corr = close.rolling(w).corr(time_period_series)
+            rsquare = rolling_corr ** 2
+        else:
+            rsquare = pd.Series(np.nan, index=close.index)
         features.append(rsquare)
         feature_names.append(f'RSQR{w}')
 
-        intercept = talib.LINEARREG_INTERCEPT(close, timeperiod=w)
-        predicted = slope * (w - 1) + intercept
-        resi = close - predicted
+        # RESI: 需要至少 w 条数据
+        if len(close) >= w:
+            intercept = talib.LINEARREG_INTERCEPT(close, timeperiod=w)
+            predicted = slope * (w - 1) + intercept
+            resi = close - predicted
+        else:
+            resi = pd.Series(np.nan, index=close.index)
         features.append(resi / (close + 1e-12))
         feature_names.append(f'RESI{w}')
 
@@ -235,14 +243,26 @@ def engineer_features(df):
 
     # 11. Index of Max/Min features (15)
     for w in windows:
-        features.append(high.rolling(w).apply(np.argmax, raw=True) / w)
+        if len(high) >= w:
+            imax_val = high.rolling(w).apply(np.argmax, raw=True)
+        else:
+            imax_val = pd.Series(np.nan, index=high.index)
+        features.append(imax_val / w)
         feature_names.append(f'IMAX{w}')
     for w in windows:
-        features.append(low.rolling(w).apply(np.argmin, raw=True) / w)
+        if len(low) >= w:
+            imin_val = low.rolling(w).apply(np.argmin, raw=True)
+        else:
+            imin_val = pd.Series(np.nan, index=low.index)
+        features.append(imin_val / w)
         feature_names.append(f'IMIN{w}')
     for w in windows:
-        imax = high.rolling(w).apply(np.argmax, raw=True)
-        imin = low.rolling(w).apply(np.argmin, raw=True)
+        if len(high) >= w:
+            imax = high.rolling(w).apply(np.argmax, raw=True)
+            imin = low.rolling(w).apply(np.argmin, raw=True)
+        else:
+            imax = pd.Series(np.nan, index=high.index)
+            imin = pd.Series(np.nan, index=low.index)
         features.append((imax - imin) / w)
         feature_names.append(f'IMXD{w}')
 
@@ -339,9 +359,9 @@ def engineer_features(df):
 
     df = pd.concat([df, feature_df], axis=1)
 
-    # 填充缺失值
+    # 填充缺失值（不用bfill避免未来数据泄露）
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
-    df = df.ffill().bfill()
+    df = df.ffill()
     df.fillna(0, inplace=True)
     return df
 
@@ -363,7 +383,7 @@ def engineer_features_158plus39(df):
     feature_cols_39 = [
         'sma_5', 'sma_20', 'ema_12', 'ema_26', 'rsi', 'macd', 'macd_signal',
         'volume_change', 'obv', 'volume_ma_5', 'volume_ma_20', 'volume_ratio',
-        'kdj_k', 'kdj_d', 'kdj_j', 'boll_mid', 'boll_std', 'atr_14', 'ema_60',
+        'kdj_k', 'kdj_d', 'kdj_j', 'boll_mid', 'boll_std', 'atr_14',
         'volatility_10', 'volatility_20', 'return_1', 'return_5', 'return_10',
         'high_low_spread', 'open_close_spread', 'high_close_spread', 'low_close_spread'
     ]
@@ -374,9 +394,9 @@ def engineer_features_158plus39(df):
     # 去重
     df_final = df_final.loc[:, ~df_final.columns.duplicated()]
 
-    # 处理 inf 和 NaN：前向填充保留时序信息
+    # 处理 inf 和 NaN（不用bfill避免未来数据泄露）
     df_final.replace([np.inf, -np.inf], np.nan, inplace=True)
-    df_final = df_final.ffill().bfill()
+    df_final = df_final.ffill()
     df_final.fillna(0, inplace=True)
 
     return df_final
@@ -391,7 +411,7 @@ FEATURE_COLUMNS_MAP = {
         'instrument', '开盘', '收盘', '最高', '最低', '成交量', '成交额', '振幅', '涨跌额', '换手率', '涨跌幅',
         'sma_5', 'sma_20', 'ema_12', 'ema_26', 'rsi', 'macd', 'macd_signal',
         'volume_change', 'obv', 'volume_ma_5', 'volume_ma_20', 'volume_ratio',
-        'kdj_k', 'kdj_d', 'kdj_j', 'boll_mid', 'boll_std', 'atr_14', 'ema_60',
+        'kdj_k', 'kdj_d', 'kdj_j', 'boll_mid', 'boll_std', 'atr_14',
         'volatility_10', 'volatility_20', 'return_1', 'return_5', 'return_10',
         'high_low_spread', 'open_close_spread', 'high_close_spread', 'low_close_spread'
     ],
@@ -399,38 +419,38 @@ FEATURE_COLUMNS_MAP = {
         'instrument', '开盘', '收盘', '最高', '最低', '成交量', '成交额', '振幅', '涨跌额', '换手率', '涨跌幅',
         'KMID', 'KLEN', 'KMID2', 'KUP', 'KUP2', 'KLOW', 'KLOW2', 'KSFT', 'KSFT2',
         'OPEN0', 'HIGH0', 'LOW0', 'VWAP0',
-        'ROC5', 'ROC10', 'ROC20', 'ROC30', 'ROC60',
-        'MA5', 'MA10', 'MA20', 'MA30', 'MA60',
-        'STD5', 'STD10', 'STD20', 'STD30', 'STD60',
-        'BETA5', 'BETA10', 'BETA20', 'BETA30', 'BETA60',
-        'RSQR5', 'RSQR10', 'RSQR20', 'RSQR30', 'RSQR60',
-        'RESI5', 'RESI10', 'RESI20', 'RESI30', 'RESI60',
-        'MAX5', 'MAX10', 'MAX20', 'MAX30', 'MAX60',
-        'MIN5', 'MIN10', 'MIN20', 'MIN30', 'MIN60',
-        'QTLU5', 'QTLU10', 'QTLU20', 'QTLU30', 'QTLU60',
-        'QTLD5', 'QTLD10', 'QTLD20', 'QTLD30', 'QTLD60',
-        'RANK5', 'RANK10', 'RANK20', 'RANK30', 'RANK60',
-        'RSV5', 'RSV10', 'RSV20', 'RSV30', 'RSV60',
-        'IMAX5', 'IMAX10', 'IMAX20', 'IMAX30', 'IMAX60',
-        'IMIN5', 'IMIN10', 'IMIN20', 'IMIN30', 'IMIN60',
-        'IMXD5', 'IMXD10', 'IMXD20', 'IMXD30', 'IMXD60',
-        'CORR5', 'CORR10', 'CORR20', 'CORR30', 'CORR60',
-        'CORD5', 'CORD10', 'CORD20', 'CORD30', 'CORD60',
-        'CNTP5', 'CNTP10', 'CNTP20', 'CNTP30', 'CNTP60',
-        'CNTN5', 'CNTN10', 'CNTN20', 'CNTN30', 'CNTN60',
-        'CNTD5', 'CNTD10', 'CNTD20', 'CNTD30', 'CNTD60',
-        'SUMP5', 'SUMP10', 'SUMP20', 'SUMP30', 'SUMP60',
-        'SUMN5', 'SUMN10', 'SUMN20', 'SUMN30', 'SUMN60',
-        'SUMD5', 'SUMD10', 'SUMD20', 'SUMD30', 'SUMD60',
-        'VMA5', 'VMA10', 'VMA20', 'VMA30', 'VMA60',
-        'VSTD5', 'VSTD10', 'VSTD20', 'VSTD30', 'VSTD60',
-        'WVMA5', 'WVMA10', 'WVMA20', 'WVMA30', 'WVMA60',
-        'VSUMP5', 'VSUMP10', 'VSUMP20', 'VSUMP30', 'VSUMP60',
-        'VSUMN5', 'VSUMN10', 'VSUMN20', 'VSUMN30', 'VSUMN60',
-        'VSUMD5', 'VSUMD10', 'VSUMD20', 'VSUMD30', 'VSUMD60',
+        'ROC5', 'ROC10', 'ROC20',
+        'MA5', 'MA10', 'MA20',
+        'STD5', 'STD10', 'STD20',
+        'BETA5', 'BETA10', 'BETA20',
+        'RSQR5', 'RSQR10', 'RSQR20',
+        'RESI5', 'RESI10', 'RESI20',
+        'MAX5', 'MAX10', 'MAX20',
+        'MIN5', 'MIN10', 'MIN20',
+        'QTLU5', 'QTLU10', 'QTLU20',
+        'QTLD5', 'QTLD10', 'QTLD20',
+        'RANK5', 'RANK10', 'RANK20',
+        'RSV5', 'RSV10', 'RSV20',
+        'IMAX5', 'IMAX10', 'IMAX20',
+        'IMIN5', 'IMIN10', 'IMIN20',
+        'IMXD5', 'IMXD10', 'IMXD20',
+        'CORR5', 'CORR10', 'CORR20',
+        'CORD5', 'CORD10', 'CORD20',
+        'CNTP5', 'CNTP10', 'CNTP20',
+        'CNTN5', 'CNTN10', 'CNTN20',
+        'CNTD5', 'CNTD10', 'CNTD20',
+        'SUMP5', 'SUMP10', 'SUMP20',
+        'SUMN5', 'SUMN10', 'SUMN20',
+        'SUMD5', 'SUMD10', 'SUMD20',
+        'VMA5', 'VMA10', 'VMA20',
+        'VSTD5', 'VSTD10', 'VSTD20',
+        'WVMA5', 'WVMA10', 'WVMA20',
+        'VSUMP5', 'VSUMP10', 'VSUMP20',
+        'VSUMN5', 'VSUMN10', 'VSUMN20',
+        'VSUMD5', 'VSUMD10', 'VSUMD20',
         'sma_5', 'sma_20', 'ema_12', 'ema_26', 'rsi', 'macd', 'macd_signal',
         'volume_change', 'obv', 'volume_ma_5', 'volume_ma_20', 'volume_ratio',
-        'kdj_k', 'kdj_d', 'kdj_j', 'boll_mid', 'boll_std', 'atr_14', 'ema_60',
+        'kdj_k', 'kdj_d', 'kdj_j', 'boll_mid', 'boll_std', 'atr_14',
         'volatility_10', 'volatility_20', 'return_1', 'return_5', 'return_10',
         'high_low_spread', 'open_close_spread', 'high_close_spread', 'low_close_spread'
     ]
@@ -500,10 +520,10 @@ def create_ranking_dataset_vectorized(data, features, sequence_length,
             if end_idx + 5 >= n:
                 continue
 
-            # 未来 5 条数据日期必须连续（自然日相邻）
-            future_dates = dates_day[end_idx + 1:end_idx + 6]
-            future_diffs = np.diff(future_dates).astype(np.int64)
-            if not np.all(future_diffs == 1):
+            # 未来 5 条数据需在合理时间范围内（排除长期停牌）
+            last_future_date = dates_day[end_idx + 5]
+            total_span = (last_future_date - dates_day[end_idx]).astype(np.int64)
+            if total_span > 12:  # 正常5个交易日约7天，允许少量假期延长
                 continue
 
             seq = feature_values[i: i + sequence_length]   # (L, F)
@@ -554,3 +574,232 @@ def create_ranking_dataset_vectorized(data, features, sequence_length,
         print(f"每个样本平均包含 {avg_stocks:.1f} 只股票")
 
     return sequences, targets, relevance_scores, stock_indices
+
+
+# ============================================================================
+# 截面标准化
+# ============================================================================
+
+def cross_sectional_standardize(data, features):
+    """
+    每个交易日，对所有股票的每个特征独立做 Z-score 标准化。
+    单向 GRU 无股票间交互能力，必须先让特征在截面上可比。
+
+    参数:
+      data:     DataFrame, 含 'datetime' 和 features 列
+      features: 特征列名列表
+
+    返回: 标准化后的 DataFrame (copy)
+    """
+    data = data.copy()
+    for f in features:
+        if f not in data.columns:
+            continue
+        # 逐日计算截面均值/标准差并标准化
+        stats = data.groupby('datetime')[f].agg(['mean', 'std'])
+        # 合并回原数据
+        date_stats = data[['datetime']].join(stats, on='datetime')
+        mean_val = date_stats['mean'].values
+        std_val = date_stats['std'].values
+        # 避免除零
+        std_val = np.where(std_val > 1e-8, std_val, 1.0)
+        data[f] = (data[f].values - mean_val) / std_val
+        # 将 std≈0 的特征置零
+        data.loc[date_stats['std'].values <= 1e-8, f] = 0.0
+    return data
+
+
+# ============================================================================
+# Per-Stock 数据集创建（断点感知）
+# ============================================================================
+
+def add_cross_sectional_rank_features(data, features):
+    """
+    为每个特征添加横截面 rank 特征（0~1）。
+    对每个交易日，计算每个特征在当日所有股票间的百分位排名。
+    这让单向 GRU 能够感知股票间的相对位置，部分替代 Transformer 的 cross-stock attention。
+
+    参数:
+      data:     DataFrame, 含 'datetime' 和 features 列
+      features: 原始特征列名列表
+
+    返回:
+      data:     添加了 CSRANK_{f} 列的 DataFrame
+      new_features: 所有特征列名（原始 + 新增）
+    """
+    data = data.copy()
+    rank_features = []
+
+    for f in features:
+        if f not in data.columns:
+            continue
+        rank_col = f'RK_{f}'
+        # 逐日计算百分位排名
+        data[rank_col] = data.groupby('datetime')[f].rank(pct=True)
+        rank_features.append(rank_col)
+
+    # 填充可能的 NaN（某天只有 1 只股票时）
+    data[rank_features] = data[rank_features].fillna(0.5)
+
+    all_features = list(features) + rank_features
+    print(f"横截面 Rank 特征: {len(features)} → {len(all_features)} (+{len(rank_features)})")
+    return data, all_features
+
+
+def create_per_stock_dataset(data, features, sequence_length,
+                              min_window_end_date=None):
+    """
+    每只股票独立构建滑动窗口，不按日期聚合。
+    处理停牌断点：只在中国A股交易周内的连续段中构建窗口。
+
+    参数:
+      data:               DataFrame, 含 'datetime'/'instrument'/'label' 列
+      features:           特征列名列表
+      sequence_length:    序列长度 (窗口大小)
+      min_window_end_date: 窗口结束日下限 (验证集使用)
+
+    返回:
+      sequences:          np.array [M, L, F]  扁平化的 per-stock 样本
+      targets:            np.array [M]         未来 5 日收益率标签
+      stock_ids:          np.array [M]         instrument 索引
+      window_end_dates:   np.array [M]         datetime64 窗口结束日
+      tradable:           np.array [M] bool    T+1 开盘是否可买入
+    """
+    import pandas as pd
+    import numpy as np
+
+    print("正在创建 per-stock 数据集（断点感知）...")
+
+    data = data.copy()
+    data['datetime'] = pd.to_datetime(data['datetime'])
+
+    # 按股票和时间排序
+    data = data.sort_values(['instrument', 'datetime']).reset_index(drop=True)
+
+    # 剔除无 label 的行
+    data = data.dropna(subset=['label'])
+
+    all_seqs = []
+    all_targets = []
+    all_stock_ids = []
+    all_end_dates = []
+    all_tradable = []
+
+    # 找到 '开盘' 和 '收盘' 在 features 中的位置（用于可交易性检查）
+    try:
+        open_col_idx = list(features).index('开盘')
+        close_col_idx = list(features).index('收盘')
+        do_tradability_check = True
+    except ValueError:
+        do_tradability_check = False
+        print("警告: features 中无 '开盘'/'收盘' 列，跳过可交易性检查")
+
+    print("Step 1: 为每只股票检测连续段并生成窗口...")
+    grouped = data.groupby('instrument')
+
+    total_skipped_breaks = 0
+    total_skipped_short = 0
+
+    for stock_id, group in tqdm(grouped, desc="Processing stocks"):
+        if len(group) < sequence_length + 5:
+            total_skipped_short += 1
+            continue
+
+        feature_values = group[features].values.astype(np.float32)  # (T, F)
+        labels = group['label'].values.astype(np.float32)           # (T,)
+        dates = group['datetime'].values                            # datetime64[ns]
+        dates_day = dates.astype('datetime64[D]')
+
+        # 检测连续段：自然日差 > 10 视为断点（允许国庆/春节等长假，排除长期停牌）
+        n = len(group)
+        date_diffs = np.diff(dates_day).astype(np.int64)
+        break_indices = np.where(date_diffs > 10)[0]
+
+        segments = []
+        seg_start = 0
+        for b_idx in break_indices:
+            segments.append((seg_start, b_idx + 1))  # [start, end) 左闭右开
+            seg_start = b_idx + 1
+        segments.append((seg_start, n))
+
+        for seg_start, seg_end in segments:
+            seg_len = seg_end - seg_start
+            if seg_len < sequence_length + 5:
+                total_skipped_short += 1
+                continue
+
+            num_windows = seg_len - sequence_length - 5 + 1
+            seg_feat = feature_values[seg_start:seg_end]
+            seg_labels = labels[seg_start:seg_end]
+            seg_dates_day = dates_day[seg_start:seg_end]
+
+            for i in range(num_windows):
+                win_end_idx = i + sequence_length - 1  # 窗口在段内的结束索引
+
+                # 窗口最后一天到第 5 个未来日跨度需合理（排除长期停牌）
+                last_future_date = seg_dates_day[win_end_idx + 5]
+                total_span = (last_future_date - seg_dates_day[win_end_idx]).astype(np.int64)
+                if total_span > 12:
+                    total_skipped_breaks += 1
+                    continue
+
+                seq = seg_feat[i: i + sequence_length]          # (L, F)
+                target = seg_labels[win_end_idx]                  # 标量
+                end_date = dates[seg_start + win_end_idx]
+
+                # 可交易性检查：T+1 开盘是否一字涨停（无法买入）
+                tradable = True
+                if do_tradability_check:
+                    t1_open = seg_feat[win_end_idx + 1, open_col_idx]   # T+1 开盘
+                    t_close = seg_feat[win_end_idx, close_col_idx]       # T 收盘
+                    t1_gap = (t1_open / (t_close + 1e-12)) - 1.0
+                    if t1_gap >= 0.095:  # 开盘涨幅 ≥ 9.5%，接近一字板
+                        tradable = False
+
+                # ASSERT: 窗口内日期单调递增
+                if i == 0:
+                    win_dates = seg_dates_day[i: i + sequence_length]
+                    assert np.all(np.diff(win_dates.astype(np.int64)) > 0), \
+                        f"窗口内日期非严格递增! stock={stock_id}, end_date={end_date}"
+
+                all_seqs.append(seq)
+                all_targets.append(target)
+                all_stock_ids.append(stock_id)
+                all_end_dates.append(end_date)
+                all_tradable.append(tradable)
+
+    if total_skipped_breaks > 0 or total_skipped_short > 0:
+        print(f"跳过的短段: {total_skipped_short}, 跳过的大跨度窗口: {total_skipped_breaks}")
+
+    if len(all_seqs) == 0:
+        print("警告: 未生成任何 per-stock 窗口！请检查数据时间范围是否足够。")
+        return (np.empty((0, sequence_length, 0), dtype=np.float32),
+                np.empty((0,), dtype=np.float32),
+                np.array([], dtype=object),
+                np.array([], dtype='datetime64[D]'),
+                np.array([], dtype=bool))
+
+    sequences = np.array(all_seqs, dtype=np.float32)            # (M, L, F)
+    targets = np.array(all_targets, dtype=np.float32)           # (M,)
+    stock_ids = np.array(all_stock_ids)                          # (M,)
+    window_end_dates = np.array(all_end_dates)                   # (M,)
+    tradable = np.array(all_tradable, dtype=bool)                # (M,)
+
+    # 按 min_window_end_date 过滤（验证集时间隔离）
+    if min_window_end_date is not None:
+        min_dt = pd.to_datetime(min_window_end_date)
+        mask = window_end_dates >= np.datetime64(min_dt)
+        print(f"min_window_end_date 过滤: {mask.sum()} / {len(mask)} 个样本保留")
+        sequences = sequences[mask]
+        targets = targets[mask]
+        stock_ids = stock_ids[mask]
+        window_end_dates = window_end_dates[mask]
+        tradable = tradable[mask]
+
+    print(f"成功创建 {len(sequences)} 个 per-stock 样本")
+    print(f"  序列形状: {sequences.shape}")
+    if do_tradability_check:
+        print(f"  可交易样本: {tradable.sum()} / {len(tradable)} ({100*tradable.sum()/max(1,len(tradable)):.1f}%)")
+    print(f"  窗口日期范围: {window_end_dates.min()} ~ {window_end_dates.max()}")
+
+    return sequences, targets, stock_ids, window_end_dates, tradable

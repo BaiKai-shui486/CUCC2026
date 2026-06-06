@@ -1,0 +1,54 @@
+# ============================================================================
+# THU-BDC2026 Docker Compose 配置
+# 镜像: dbc2026:latest
+#
+# 使用方式:
+#   docker compose -f app/docker/docker-compose.yml build
+#   docker compose -f app/docker/docker-compose.yml up -d
+#   docker exec -it dbc2026 bash /app/init.sh
+#   docker exec -it dbc2026 bash /app/train.sh
+#   docker exec -it dbc2026 bash /app/test.sh
+# ============================================================================
+
+services:
+  dbc2026:
+    image: dbc2026:latest
+    container_name: dbc2026
+    pull_policy: never
+    build:
+      context: ..                    # app/ 目录作为构建上下文
+      dockerfile: docker/Dockerfile
+
+    # --- GPU 配置 ---
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    # --- 挂载目录 ---
+    volumes:
+      - ../code:/app/code
+      - ../config:/app/config
+      - ../data:/app/data
+      - ../model:/app/model
+      - ../output:/app/output
+      - ../temp:/app/temp
+
+    # --- 挂载脚本文件 ---
+      - ../init.sh:/app/init.sh
+      - ../train.sh:/app/train.sh
+      - ../test.sh:/app/test.sh
+      - ../requirements.txt:/app/requirements.txt
+
+    working_dir: /app
+    privileged: true
+    mem_limit: 16g
+    memswap_limit: 16g
+    cpus: 10.0

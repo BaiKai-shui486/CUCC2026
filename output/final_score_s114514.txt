@@ -1,0 +1,4 @@
+
+Phase: 2 (LambdaRank)
+Best epoch: 5
+Best final_score: 0.141023
