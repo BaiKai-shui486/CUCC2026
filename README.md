@@ -1,4 +1,4 @@
-# THU-BDC2026 — StockTransformer 股票排序模型
+# THU-BDC2026 — CausalGRUStockScorer 股票排序模型（队伍：GEMN）
 
 ## 环境配置
 

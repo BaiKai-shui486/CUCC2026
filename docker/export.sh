@@ -12,7 +12,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(dirname "$SCRIPT_DIR")"
-IMAGE_NAME="dbc2026:latest"
+IMAGE_NAME="bdc2026:latest"
 TAR_FILE="$SCRIPT_DIR/GEMN.tar"
 
 MODE="${1:-all}"

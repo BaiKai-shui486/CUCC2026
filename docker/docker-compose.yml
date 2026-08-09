@@ -1,19 +1,19 @@
 # ============================================================================
 # THU-BDC2026 Docker Compose 配置
-# 镜像: dbc2026:latest
+# 镜像: bdc2026:latest
 #
 # 使用方式:
 #   docker compose -f app/docker/docker-compose.yml build
 #   docker compose -f app/docker/docker-compose.yml up -d
-#   docker exec -it dbc2026 bash /app/init.sh
-#   docker exec -it dbc2026 bash /app/train.sh
-#   docker exec -it dbc2026 bash /app/test.sh
+#   docker exec -it bdc2026 bash /app/init.sh
+#   docker exec -it bdc2026 bash /app/train.sh
+#   docker exec -it bdc2026 bash /app/test.sh
 # ============================================================================
 
 services:
-  dbc2026:
-    image: dbc2026:latest
-    container_name: dbc2026
+  bdc2026:
+    image: bdc2026:latest
+    container_name: bdc2026
     pull_policy: never
     build:
       context: ..                    # app/ 目录作为构建上下文

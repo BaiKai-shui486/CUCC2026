@@ -1,12 +1,12 @@
-    """
-    将股票数据按年份划分为训练集和测试集
-    - 2026年数据作为测试集 (test.csv)
-    - 其他年份数据作为训练集 (train.csv)
-    
-    Args:
-        input_path: 原始数据文件路径
-        output_dir: 输出目录
-    """
+"""
+将股票数据按年份划分为训练集和测试集
+- 2026年数据作为测试集 (test.csv)
+- 其他年份数据作为训练集 (train.csv)
+
+Args:
+    input_path: 原始数据文件路径
+    output_dir: 输出目录
+"""
 import pandas as pd
 from pathlib import Path
 
