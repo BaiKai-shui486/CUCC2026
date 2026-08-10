@@ -32,20 +32,11 @@ services:
               count: 1
               capabilities: [gpu]
 
-    # --- 挂载目录 ---
+    # --- 挂载目录（data/output/temp 由 compose 挂载；code/model 已打包进镜像） ---
     volumes:
-      - ../code:/app/code
-      - ../config:/app/config
       - ../data:/app/data
-      - ../model:/app/model
       - ../output:/app/output
       - ../temp:/app/temp
-
-    # --- 挂载脚本文件 ---
-      - ../init.sh:/app/init.sh
-      - ../train.sh:/app/train.sh
-      - ../test.sh:/app/test.sh
-      - ../requirements.txt:/app/requirements.txt
 
     working_dir: /app
     privileged: true
